@@ -1,0 +1,33 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+credentials.json
+token.json
+**/token.json
+
+# ── Generated output ──────────────────────────────────────────────────────────
+weekly_plan.json
+weekly_plan.txt
+weekly_plan.ics
+
+# ── Personal data ─────────────────────────────────────────────────────────────
+*.csv
+
+# ── Local session / dev files ─────────────────────────────────────────────────
+Wlasne/
+.claude/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
