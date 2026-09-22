@@ -62,7 +62,10 @@ def compute_day_blocks(
     busy_intervals. Gaps shorter than min_block_minutes are dropped rather
     than kept as a fake block. Returns 0-3 DayBlock entries in
     chronological order, labeled D1/D2/D3 — if more than three real gaps
-    exist, only the first three (chronologically) are kept.
+    exist, the three *longest* gaps are kept (not the first three
+    chronologically), then re-sorted chronologically for labeling, so a
+    real block (e.g. the evening) is never silently discarded just
+    because it happened to be the 4th gap of the day.
     """
     busy = _merge_and_clip(busy_intervals, day_start, day_end)
 
@@ -79,7 +82,9 @@ def compute_day_blocks(
     real_gaps = [g for g in gaps if (g[1] - g[0]).total_seconds() >= min_seconds]
 
     labels = ["D1", "D2", "D3"]
+    best = sorted(real_gaps, key=lambda g: g[1] - g[0], reverse=True)[:3]
+    best.sort(key=lambda g: g[0])
     return [
         DayBlock(id=labels[i], start=g[0], end=g[1])
-        for i, g in enumerate(real_gaps[:3])
+        for i, g in enumerate(best)
     ]

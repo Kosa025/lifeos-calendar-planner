@@ -73,9 +73,12 @@ def test_overlapping_busy_intervals_are_merged():
     assert blocks[1].start == _dt(13, 0)
 
 
-def test_more_than_three_gaps_caps_at_three_chronological():
-    # Four busy intervals leave five free gaps — only the first three
-    # (chronologically) become D1/D2/D3; later ones are dropped.
+def test_more_than_three_gaps_keeps_the_three_longest():
+    # Four busy intervals leave five free gaps of 60, 45, 45, 45, and 405
+    # minutes. The three LONGEST survive (405, 60, and the first of the
+    # 45-min ties), then get re-sorted chronologically for D1/D2/D3
+    # labeling — the evening block (405 min) must not be discarded just
+    # because it's chronologically last.
     busy = [
         BusyInterval(start=_dt(9, 0), end=_dt(9, 45)),
         BusyInterval(start=_dt(10, 30), end=_dt(11, 15)),
@@ -89,7 +92,10 @@ def test_more_than_three_gaps_caps_at_three_chronological():
     assert [b.id for b in blocks] == ["D1", "D2", "D3"]
     assert blocks[0].start == _dt(8, 0)
     assert blocks[0].end == _dt(9, 0)
-    assert blocks[2].end == _dt(12, 0)
+    assert blocks[1].start == _dt(9, 45)
+    assert blocks[1].end == _dt(10, 30)
+    assert blocks[2].start == _dt(14, 15)
+    assert blocks[2].end == _dt(21, 0)
 
 
 def test_busy_interval_entirely_outside_window_is_ignored():

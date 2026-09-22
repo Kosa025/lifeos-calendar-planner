@@ -99,6 +99,12 @@ DS_LABELS = {
     "DS7": "DS7 — Evening Work",
 }
 
+BLOCK_LABELS = {
+    "D1": "Morning Block",
+    "D2": "Afternoon Block",
+    "D3": "Evening Block",
+}
+
 
 # ─── Standalone Calendar Helpers ──────────────────────────────────────────────
 
@@ -400,23 +406,34 @@ class LifeOSPlanner:
         day_start = datetime.combine(day_date, MR_END_TIME, tzinfo=WARSAW_TZ)
         day_end = datetime.combine(day_date, ER_START_TIME, tzinfo=WARSAW_TZ)
 
+        # Pass all events through as-is — compute_day_blocks already clips
+        # each interval to [day_start, day_end] and drops non-overlapping
+        # ones, so filtering here is both redundant and wrong (it drops
+        # multi-day events that span this day without starting/ending on it).
         busy = [
             BusyInterval(start=ev["start_dt"], end=ev["end_dt"])
             for ev in existing_events
-            if ev["start_dt"].date() == day_date or ev["end_dt"].date() == day_date
         ]
 
         # Protect the fixed BUFFER (11:15-12:00) and INT (17:00-18:00)
         # windows from adaptive D-block placement — they're still rendered
         # as their own fixed blocks in _build_day_blocks.
-        busy.append(BusyInterval(
-            start=datetime.combine(day_date, time(11, 15), tzinfo=WARSAW_TZ),
-            end=datetime.combine(day_date, time(12, 0), tzinfo=WARSAW_TZ),
-        ))
-        busy.append(BusyInterval(
-            start=datetime.combine(day_date, time(17, 0), tzinfo=WARSAW_TZ),
-            end=datetime.combine(day_date, time(18, 0), tzinfo=WARSAW_TZ),
-        ))
+        # Also protect the fixed meal/log windows that write_to_google_calendar
+        # inserts unconditionally (Breakfast, Lunch, walk, Daily Log Review) so
+        # adaptive D-blocks never span across them either.
+        protected_windows = [
+            (time(11, 15), time(12, 0)),   # BUFFER
+            (time(17, 0), time(18, 0)),    # INT
+            (time(9, 30), time(10, 0)),    # Breakfast
+            (time(14, 0), time(14, 45)),   # Lunch
+            (time(14, 45), time(15, 0)),   # Post-lunch walk
+            (time(20, 30), time(21, 0)),   # Daily Log Review
+        ]
+        for win_start, win_end in protected_windows:
+            busy.append(BusyInterval(
+                start=datetime.combine(day_date, win_start, tzinfo=WARSAW_TZ),
+                end=datetime.combine(day_date, win_end, tzinfo=WARSAW_TZ),
+            ))
 
         day_blocks = compute_day_blocks(
             day_start=day_start, day_end=day_end,
@@ -665,6 +682,11 @@ class LifeOSPlanner:
             "type": "Evening Routine", "fixed": True, "sessions": [],
         })
 
+        def _block_sort_key(b):
+            t = b.get("time", "")
+            return t[:5] if t else "00:00"
+
+        blocks.sort(key=_block_sort_key)
         return blocks
 
     def _build_sunday_blocks(self) -> List[Dict]:
@@ -951,7 +973,7 @@ class LifeOSPlanner:
                         description = "(free slot)"
 
                     _insert({
-                        "summary": DS_LABELS.get(sid, sid),
+                        "summary": BLOCK_LABELS.get(sid, DS_LABELS.get(sid, sid)),
                         "start": {"dateTime": _dt(d, start_t), "timeZone": tz},
                         "end":   {"dateTime": _dt(d, end_t),   "timeZone": tz},
                         "colorId": color_id,
