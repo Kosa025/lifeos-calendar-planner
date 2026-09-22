@@ -406,6 +406,18 @@ class LifeOSPlanner:
             if ev["start_dt"].date() == day_date or ev["end_dt"].date() == day_date
         ]
 
+        # Protect the fixed BUFFER (11:15-12:00) and INT (17:00-18:00)
+        # windows from adaptive D-block placement — they're still rendered
+        # as their own fixed blocks in _build_day_blocks.
+        busy.append(BusyInterval(
+            start=datetime.combine(day_date, time(11, 15), tzinfo=WARSAW_TZ),
+            end=datetime.combine(day_date, time(12, 0), tzinfo=WARSAW_TZ),
+        ))
+        busy.append(BusyInterval(
+            start=datetime.combine(day_date, time(17, 0), tzinfo=WARSAW_TZ),
+            end=datetime.combine(day_date, time(18, 0), tzinfo=WARSAW_TZ),
+        ))
+
         day_blocks = compute_day_blocks(
             day_start=day_start, day_end=day_end,
             busy_intervals=busy, min_block_minutes=MIN_BLOCK_MINUTES,
@@ -627,6 +639,11 @@ class LifeOSPlanner:
                     "tasks": slot.get("tasks", []),
                 }],
             })
+
+        blocks.append({
+            "block": "BUFFER", "time": "11:15-12:00", "type": "buffer",
+            "fixed": True, "sessions": [],
+        })
 
         if existing_events is not None and day_date is not None:
             int_start = datetime.combine(day_date, time(17, 0), tzinfo=WARSAW_TZ)
