@@ -22,6 +22,8 @@ except ImportError:
 
 WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
+from blocks import BusyInterval, compute_day_blocks
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -65,6 +67,10 @@ DS_BLOCKS = {
         {"id": "DS_DAILY_LOG", "time": "20:30-21:00", "duration_min": 30, "fixed": True},
     ],
 }
+
+MIN_BLOCK_MINUTES = 45  # placeholder — Maciej will tune this from his self-experiment logging (see spec)
+MR_END_TIME = time(8, 0)
+ER_START_TIME = time(21, 0)
 
 PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2, "Other": 3, "To Check": 4}
 
@@ -384,6 +390,39 @@ class LifeOSPlanner:
 
     # ── Scheduling ────────────────────────────────────────────────────────────
 
+    def _adaptive_slots_for_day(self, day_date: date, existing_events: List[Dict]) -> List[Dict]:
+        """
+        Build this day's D1/D2/D3 slot list from its real calendar shape,
+        using blocks.compute_day_blocks. Returns dicts shaped like the
+        legacy static week_slots entries so _place_globally and
+        _build_day_blocks keep working unchanged.
+        """
+        day_start = datetime.combine(day_date, MR_END_TIME, tzinfo=WARSAW_TZ)
+        day_end = datetime.combine(day_date, ER_START_TIME, tzinfo=WARSAW_TZ)
+
+        busy = [
+            BusyInterval(start=ev["start_dt"], end=ev["end_dt"])
+            for ev in existing_events
+            if ev["start_dt"].date() == day_date or ev["end_dt"].date() == day_date
+        ]
+
+        day_blocks = compute_day_blocks(
+            day_start=day_start, day_end=day_end,
+            busy_intervals=busy, min_block_minutes=MIN_BLOCK_MINUTES,
+        )
+
+        return [
+            {
+                "id": b.id,
+                "time": f"{b.start.strftime('%H:%M')}-{b.end.strftime('%H:%M')}",
+                "duration_min": b.duration_min,
+                "remaining": b.duration_min,
+                "tasks": [],
+                "status": "ok",
+            }
+            for b in day_blocks
+        ]
+
     def generate_weekly_plan(
         self,
         tasks: List[Dict],
@@ -443,21 +482,17 @@ class LifeOSPlanner:
         p3_tasks.sort(key=_dl_key)
 
         # ── Build ordered slot list — Mon-Sat only (offset 0-5); Sunday excluded ──
+        # Adaptive: each day's D1/D2/D3 come from its real calendar shape,
+        # not a fixed weekly template (see blocks.compute_day_blocks).
         week_slots: List[Dict] = []
         for offset in range(6):  # 0=Mon … 5=Sat; 6=Sun handled separately
-            for block_id in ("D1", "D2", "D3"):
-                for slot in DS_BLOCKS[block_id]:
-                    if not slot.get("fixed"):
-                        week_slots.append({
-                            "day_offset": offset,
-                            "block": block_id,
-                            "id": slot["id"],
-                            "time": slot["time"],
-                            "duration_min": slot["duration_min"],
-                            "remaining": slot["duration_min"],
-                            "tasks": [],
-                            "status": "ok",
-                        })
+            day_date = week_start + timedelta(days=offset)
+            for slot in self._adaptive_slots_for_day(day_date, existing_events):
+                week_slots.append({
+                    "day_offset": offset,
+                    "block": slot["id"],
+                    **slot,
+                })
 
         # ── Mark slots that conflict with existing primary calendar events ──────
         blocked_count = 0
@@ -572,7 +607,6 @@ class LifeOSPlanner:
         return entry
 
     def _build_day_blocks(self, day_slots: List[Dict], existing_events=None, day_date=None) -> List[Dict]:
-        slot_by_id = {s["id"]: s for s in day_slots}
         blocks = []
 
         blocks.append({
@@ -580,36 +614,19 @@ class LifeOSPlanner:
             "type": "Morning Routine", "fixed": True, "sessions": [],
         })
 
-        d1_sessions = []
-        for slot in DS_BLOCKS["D1"]:
-            if slot.get("fixed"):
-                d1_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "type": "fixed_block", "tasks": []})
-            else:
-                s = slot_by_id.get(slot["id"], {})
-                d1_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "duration_min": slot["duration_min"],
-                                    "status": s.get("status", "ok"),
-                                    "tasks": s.get("tasks", [])})
-        blocks.append({"block": "D1", "time": "08:00-11:15", "fixed": False, "sessions": d1_sessions})
-
-        blocks.append({
-            "block": "BUFFER", "time": "11:15-12:00",
-            "type": "buffer", "fixed": True, "sessions": [],
-        })
-
-        d2_sessions = []
-        for slot in DS_BLOCKS["D2"]:
-            if slot.get("fixed"):
-                d2_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "type": "fixed_block", "tasks": []})
-            else:
-                s = slot_by_id.get(slot["id"], {})
-                d2_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "duration_min": slot["duration_min"],
-                                    "status": s.get("status", "ok"),
-                                    "tasks": s.get("tasks", [])})
-        blocks.append({"block": "D2", "time": "12:00-17:00", "fixed": False, "sessions": d2_sessions})
+        for slot in day_slots:
+            blocks.append({
+                "block": slot["id"],
+                "time": slot["time"],
+                "fixed": False,
+                "sessions": [{
+                    "id": slot["id"],
+                    "time": slot["time"],
+                    "duration_min": slot["duration_min"],
+                    "status": slot.get("status", "ok"),
+                    "tasks": slot.get("tasks", []),
+                }],
+            })
 
         if existing_events is not None and day_date is not None:
             int_start = datetime.combine(day_date, time(17, 0), tzinfo=WARSAW_TZ)
@@ -625,19 +642,6 @@ class LifeOSPlanner:
             })
         else:
             print(f"[SKIP] INT Buffer on {day_date} — slot occupied")
-
-        d3_sessions = []
-        for slot in DS_BLOCKS["D3"]:
-            if slot.get("fixed"):
-                d3_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "type": "fixed_block", "tasks": []})
-            else:
-                s = slot_by_id.get(slot["id"], {})
-                d3_sessions.append({"id": slot["id"], "time": slot["time"],
-                                    "duration_min": slot["duration_min"],
-                                    "status": s.get("status", "ok"),
-                                    "tasks": s.get("tasks", [])})
-        blocks.append({"block": "D3", "time": "18:00-21:00", "fixed": False, "sessions": d3_sessions})
 
         blocks.append({
             "block": "ER", "time": "21:00-23:00",
